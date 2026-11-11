@@ -1,146 +1,109 @@
 // ==UserScript==
 // @name			Bulbapedia Item Filter
-// @namespace		Seeker02
-// @version			1.0.0
+// @namespace		https://github.com/TheFirstSeeker
+// @version			1.1.0
 // @description     Allows you to filter items by games
-// @author			Seeker
+// @author			TheFirstSeeker
 // @match			https://bulbapedia.bulbagarden.net/wiki/*
 // @grant			none
+// @license			MIT
+// @downloadURL     https://raw.githubusercontent.com/TheFirstSeeker/Bulbapedia-Item-Filter/refs/heads/main/Bulbapedia%20Item%20Filter.user.js
 // ==/UserScript==
 
-// find all unique game texts in span elements in each table
-function findUniqueGames(table) {
-    var games = [];
-    var spans = table.querySelectorAll('span[style^="background"]');
+(() => {
+    'use strict';
 
-    spans.forEach(span => {
-        var text = span.textContent.trim();
-        var innerSpan = span.querySelector('a > span');
-        span.innerHTML = innerSpan.outerHTML;
-        if (text !== '' && !games.some(node => node.textContent.trim() === text)) {
-            games.push(span);
-        }
-    });
+    const BADGE = 'span[style^="background"]';
+    const GAME = 'span[style^="color"]';
 
-    return games;
-}
+    // Find the unique games in a table's badges (game code -> first badge, in page order).
+    function findUniqueGames(table) {
+        const games = new Map();
 
-// function to add class="hide" to entries
-function HideEntries(NodeList) {
-    for (var i = 0; i < NodeList.length; i++) {
-        NodeList[i].style.display = "none";
-    }
-}
-
-// function to show all entries
-function ShowEntries(NodeList) {
-    for (var i = 1; i < NodeList.length; i++) {
-        NodeList[i].style.display = "table-row";
-    }
-}
-
-function FindNodes(NodeList, parameter) {
-    var HideList = [];
-
-    if (parameter.checked) {
-        var filter = parameter.parentElement.textContent.trim()
-
-        for (var i = 0; i < NodeList.length; i++) {
-            var games = NodeList[i].querySelectorAll('span[style^="color"]');
-
-            // Check if any span contains the game
-            var hasText = Array.from(games).some(game => game.textContent.trim() === filter);
-
-            // If the game is not found, hide the row
-            if (!hasText) {
-                HideList.push(NodeList[i]);
-            }
-        }
-    }
-
-    return HideList;
-}
-
-// function to apply filters
-function ApplyFilters(NodeList, filters) {
-    var HideList = [];
-    var FilteredList = NodeList;
-
-    for (var i = 0; i < filters.length; i++) {
-        HideList = FindNodes(FilteredList, filters[i]);
-        if(HideList.length != 0) {
-            FilteredList = HideList;
-        }
-    }
-
-    if (FilteredList != NodeList) {
-        HideEntries(FilteredList);
-    }
-}
-
-// https://stackoverflow.com/questions/19736663/appending-elements-to-dom-with-indentation-spacing
-function indentedAppend(parent, child) {
-    var indent = "", elem = parent;
-
-    while (elem && elem !== document.body) {
-        indent += "  ";
-        elem = elem.parentNode;
-    }
-
-    if (parent.hasChildNodes() && parent.lastChild.nodeType === 3 && /^\s*[\r\n]\s*$/.test(parent.lastChild.textContent)) {
-        parent.insertBefore(document.createTextNode("\n" + indent), parent.lastChild);
-        parent.insertBefore(child, parent.lastChild);
-    }
-
-    else {
-        parent.appendChild(document.createTextNode("\n" + indent));
-        parent.appendChild(child);
-        parent.appendChild(document.createTextNode("\n" + indent.slice(0, -2)));
-    }
-}
-
-// function to apply filters
-function Filter(NodeList, filters) {
-    ShowEntries(NodeList);
-    ApplyFilters(NodeList, filters);
-}
-
-// Create filter button. call Filter() when clicked.
-function main() {
-    // Get all item tables
-    var tables = [];
-    document.querySelectorAll('th').forEach(th => {
-        if (th.textContent.trim() === 'Item') {
-          tables.push(th.parentElement.parentElement);
-        }
-    });
-
-    tables.forEach(table => {
-        var games = findUniqueGames(table);
-        // Get "Location" header
-        var locationheader = table.children[0].children[1];
-
-        // Create a container for checkboxes
-        var checkboxContainer = document.createElement("span");
-
-        // Add checkboxes
-        games.forEach(function(option) {
-            var checkbox = document.createElement("label");
-            var clonedSpan = option.cloneNode(true);
-            checkbox.appendChild(document.createElement("b")).appendChild(clonedSpan);
-
-            var checkboxInput = document.createElement("input");
-            checkboxInput.type = "checkbox";
-            // Event listener to call Filter()
-            checkboxInput.addEventListener('change', function(){Filter(table.children, locationheader.querySelectorAll('input'));});
-
-            indentedAppend(checkbox, checkboxInput);
-            indentedAppend(checkboxContainer, checkbox);
+        table.querySelectorAll(BADGE).forEach(badge => {
+            const code = badge.querySelector('a > span')?.textContent.trim();
+            if (code && !games.has(code)) games.set(code, badge);
         });
 
-        // Append checkboxes next to "Location"
-        indentedAppend(locationheader, checkboxContainer);
-    })
-}
+        return games;
+    }
 
-window.addEventListener("DOMContentLoaded", main())
+    // A copy of a badge for a checkbox label. Its link is removed, so clicking the badge
+    // toggles the checkbox instead of opening the game's article. The page's badges keep their links.
+    function labelBadge(badge) {
+        const copy = badge.cloneNode(true);
+        copy.querySelectorAll('a').forEach(link => link.replaceWith(...link.childNodes));
+        return copy;
+    }
+
+    // The game codes in each row with game badges. The header, footer and any other rows are left out,
+    // so they stay as they are. A row's games never change, so they're read once.
+    function readRows(table) {
+        const rows = [];
+
+        Array.from(table.children).forEach(row => {
+            const games = new Set(Array.from(row.querySelectorAll(`td ${GAME}`), span => span.textContent.trim()));
+            if (games.size > 0) rows.push({ row, games });
+        });
+
+        return rows;
+    }
+
+    // Show a row if no game is checked, or if the row has any of the checked games.
+    function filterRows(rows, checkboxes) {
+        const checked = checkboxes.filter(box => box.checked).map(box => box.value);
+
+        rows.forEach(({ row, games }) => {
+            const show = checked.length === 0 || checked.some(game => games.has(game));
+            row.style.display = show ? '' : 'none';
+        });
+    }
+
+    // Add child after a space. The space is the gap between each badge and its checkbox,
+    // and between the checkboxes; without it the controls run together.
+    function spacedAppend(parent, child) {
+        parent.append(' ', child);
+    }
+
+    // Add the checkboxes to one item table, next to its "Location" header.
+    function addFilter(itemHeader) {
+        const headerRow = itemHeader.parentElement;
+        const locationHeader = Array.from(headerRow.children).find(cell => cell.textContent.trim() === 'Location');
+        if (!locationHeader) return;
+
+        const table = headerRow.parentElement;
+        const games = findUniqueGames(table);
+        if (games.size === 0) return;
+
+        const rows = readRows(table);
+        const container = document.createElement('span');
+        const checkboxes = [];
+
+        games.forEach((badge, code) => {
+            const label = document.createElement('label');
+            label.appendChild(document.createElement('b')).appendChild(labelBadge(badge));
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = code;
+            checkboxes.push(checkbox);
+
+            spacedAppend(label, checkbox);
+            spacedAppend(container, label);
+        });
+
+        // One listener for all the checkboxes: their change events bubble up to the container.
+        container.addEventListener('change', () => filterRows(rows, checkboxes));
+        spacedAppend(locationHeader, container);
+    }
+
+    // Each table is set up on its own, so a table the script can't handle doesn't stop the others.
+    document.querySelectorAll('th').forEach(th => {
+        if (th.textContent.trim() !== 'Item') return;
+        try {
+            addFilter(th);
+        } catch (error) {
+            console.error('Bulbapedia Item Filter:', error);
+        }
+    });
+})();
